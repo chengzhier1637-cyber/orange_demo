@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import './App.css';
 import {
   type ResumeData,
@@ -185,6 +186,7 @@ export default function App() {
           )}
         </div>
       </main>
+      <Analytics />
     </div>
   );
 }
