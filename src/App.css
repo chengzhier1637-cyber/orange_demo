@@ -1,0 +1,659 @@
+/* ===== 应用布局 ===== */
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== 顶部标题栏 ===== */
+.app-header {
+  text-align: center;
+  padding: 32px 0 8px;
+  position: relative;
+}
+.app-header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-text-heading);
+  letter-spacing: -0.5px;
+}
+.app-header .subtitle {
+  color: var(--color-text-muted);
+  font-size: 14px;
+  margin-top: 4px;
+}
+.settings-button {
+  position: absolute;
+  top: 24px;
+  right: 0;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-button:hover {
+  background: var(--color-bg);
+}
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+}
+.settings-dialog {
+  width: min(440px, 100%);
+  padding: 24px;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+.settings-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.settings-dialog-header h2 {
+  margin-bottom: 4px;
+  font-size: 20px;
+}
+.settings-dialog-header p {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+.settings-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 20px;
+  line-height: 1;
+}
+.settings-message {
+  margin-top: 12px;
+  color: var(--color-primary);
+  font-size: 13px;
+}
+.settings-actions {
+  margin-top: 20px;
+}
+
+/* ===== 步骤指示器 ===== */
+.steps-indicator {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+  padding: 24px 0 32px;
+  align-items: center;
+}
+.step-dot {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.step-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  color: var(--color-text-muted);
+  transition: var(--transition);
+}
+.step-circle.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+.step-circle.done {
+  border-color: var(--color-success);
+  background: var(--color-success);
+  color: #fff;
+}
+.step-line {
+  width: 48px;
+  height: 2px;
+  background: var(--color-border);
+  margin: 0 8px;
+  transition: var(--transition);
+}
+.step-line.done {
+  background: var(--color-success);
+}
+.step-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+.step-label.active {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.step-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ===== 主内容区 ===== */
+.main-content {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+/* ===== 合并设置布局（上传 + 风格提取） ===== */
+.setup-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+}
+.setup-column {
+  min-width: 0;
+}
+.column-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-heading);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--color-border);
+}
+@media (max-width: 768px) {
+  .setup-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== 步骤卡片 ===== */
+.step-card {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 40px;
+  width: 100%;
+  max-width: 680px;
+  animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ===== Step 1: 上传区 ===== */
+.upload-zone {
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius);
+  padding: 56px 24px;
+  text-align: center;
+  transition: var(--transition);
+  cursor: pointer;
+  background: var(--color-bg);
+}
+.upload-zone:hover,
+.upload-zone.dragover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-light);
+}
+.upload-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  display: block;
+}
+.upload-zone h3 {
+  font-size: 18px;
+  color: var(--color-text-heading);
+  margin-bottom: 8px;
+}
+.hidden-file-input {
+  display: none;
+}
+.paste-panel {
+  margin-top: 16px;
+  display: grid;
+  gap: 10px;
+}
+.paste-panel label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.paste-panel textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  color: var(--color-text-heading);
+  background: var(--color-bg);
+  line-height: 1.5;
+}
+.paste-panel textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+.parse-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: #fff5f5;
+  color: #c92a2a;
+  font-size: 13px;
+}
+
+/* 模拟提取的简历字段 */
+.extracted-fields {
+  margin-top: 24px;
+  animation: fadeIn 0.4s ease;
+}
+.field-group {
+  margin-bottom: 16px;
+}
+.field-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.field-group input,
+.field-group textarea,
+.field-group select {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  color: var(--color-text-heading);
+  background: var(--color-bg);
+}
+.field-group input:focus,
+.field-group textarea:focus,
+.field-group select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+.field-group textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tag {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* ===== Step 2: URL 风格提取 ===== */
+.url-input-row {
+  display: flex;
+  gap: 12px;
+}
+.url-input-row input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+}
+.url-input-row input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+
+/* 提取动画 */
+.extracting-animation {
+  margin-top: 32px;
+  text-align: center;
+}
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.extracting-steps {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+.extracting-steps span {
+  display: block;
+  margin: 4px 0;
+}
+.extracting-steps span.done {
+  color: var(--color-success);
+}
+
+/* 提取结果 */
+.style-result {
+  margin-top: 32px;
+  animation: fadeIn 0.4s ease;
+}
+.style-result h3 {
+  font-size: 16px;
+  margin-bottom: 16px;
+}
+.color-palette {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.color-swatch {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+.font-preview {
+  margin-bottom: 20px;
+}
+.font-preview .font-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.font-preview .font-sample {
+  font-size: 20px;
+  color: var(--color-text-heading);
+}
+.style-preview-mini {
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+/* ===== Step 3: 预览编辑 ===== */
+.preview-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.preview-editor {
+  overflow-y: auto;
+  max-height: 560px;
+  padding-right: 8px;
+}
+.preview-panel {
+  overflow-y: auto;
+  max-height: 560px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+
+/* 简历预览页 = 模拟真实主页 */
+.resume-page {
+  padding: 40px 32px;
+  font-size: 14px;
+}
+.resume-page .rp-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+.resume-page .rp-avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: 700;
+  margin: 0 auto 12px;
+}
+.resume-page .rp-name {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--color-text-heading);
+}
+.resume-page .rp-title {
+  font-size: 15px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+.resume-page .rp-bio {
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--color-text);
+  line-height: 1.7;
+}
+
+/* 打字机光标 */
+.typewriter-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 16px;
+  background: var(--color-primary);
+  margin-left: 2px;
+  animation: blink 0.8s infinite;
+  vertical-align: middle;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* 时间轴 */
+.rp-timeline {
+  position: relative;
+  padding-left: 24px;
+  margin-top: 24px;
+}
+.rp-timeline::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-border);
+}
+.timeline-item {
+  position: relative;
+  margin-bottom: 20px;
+  cursor: pointer;
+}
+.timeline-item::before {
+  content: '';
+  position: absolute;
+  left: -21px;
+  top: 6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid #fff;
+  box-shadow: var(--shadow-sm);
+}
+.timeline-period {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.timeline-role {
+  font-weight: 600;
+  color: var(--color-text-heading);
+}
+.timeline-company {
+  color: var(--color-text);
+}
+.timeline-detail {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+  display: none;
+}
+.timeline-item.expanded .timeline-detail {
+  display: block;
+}
+
+/* 技能雷达图占位 */
+.skills-section {
+  margin-top: 24px;
+  text-align: center;
+}
+.radar-placeholder {
+  width: 180px;
+  height: 180px;
+  margin: 0 auto;
+  position: relative;
+}
+
+/* 主题切换按钮 */
+.theme-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ===== 按钮样式 ===== */
+.btn {
+  padding: 12px 28px;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-weight: 600;
+  transition: var(--transition);
+}
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: #3b5bdb;
+  box-shadow: var(--shadow-md);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+.btn-secondary:hover {
+  background: var(--color-bg);
+}
+.btn-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 32px;
+  gap: 12px;
+}
+
+/* ===== Step 4: 发布 ===== */
+.publish-success {
+  text-align: center;
+}
+.publish-icon {
+  font-size: 64px;
+  display: block;
+  margin-bottom: 16px;
+}
+.share-url-box {
+  display: flex;
+  gap: 8px;
+  margin: 20px 0;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+}
+.share-url-box input {
+  flex: 1;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  font-family: var(--font-mono);
+  color: var(--color-primary);
+}
+.share-url-box input:focus {
+  outline: none;
+}
+.btn-copy {
+  padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn-copy.copied {
+  background: var(--color-success);
+}
+
+.share-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 24px;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 768px) {
+  .preview-layout {
+    grid-template-columns: 1fr;
+  }
+  .step-card {
+    padding: 24px;
+  }
+  .steps-indicator {
+    gap: 4px;
+  }
+  .step-line {
+    width: 24px;
+    margin: 0 4px;
+  }
+}
