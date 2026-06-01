@@ -19,6 +19,8 @@ const resume = {
     },
   ],
   education: '测试大学',
+  rawText: '测试用户 前端工程师',
+  sections: [],
 };
 
 test('createResumeDraft stores parsed resume as a draft record', async () => {
@@ -38,6 +40,41 @@ test('createResumeDraft stores parsed resume as a draft record', async () => {
     assert.equal(draft.parseSource, '粘贴文本');
     assert.ok(draft.createdAt);
     assert.ok(draft.updatedAt);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('updateResumeDraft persists edited resume content', async () => {
+  const { storage, cleanup } = await createTempStorage();
+
+  try {
+    const draft = await storage.createResumeDraft({
+      resume,
+      parser: 'local',
+      parseSource: '粘贴文本',
+    });
+    const updatedDraft = await storage.updateResumeDraft(draft.id, {
+      ...resume,
+      title: '高级前端工程师',
+    });
+
+    assert.equal(updatedDraft.id, draft.id);
+    assert.equal(updatedDraft.resume.title, '高级前端工程师');
+    assert.notEqual(updatedDraft.updatedAt, draft.updatedAt);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('updateResumeDraft fails when draft does not exist', async () => {
+  const { storage, cleanup } = await createTempStorage();
+
+  try {
+    await assert.rejects(
+      storage.updateResumeDraft('missing-draft', resume),
+      /草稿不存在/,
+    );
   } finally {
     await cleanup();
   }
@@ -87,6 +124,84 @@ test('offlineHomepage marks a published homepage offline', async () => {
 
     assert.equal(offlineHomepage.status, 'offline');
     assert.ok(offlineHomepage.offlineAt);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('getPublicHomepage returns published homepage by slug', async () => {
+  const { storage, cleanup } = await createTempStorage();
+
+  try {
+    const draft = await storage.createResumeDraft({
+      resume,
+      parser: 'local',
+      parseSource: '粘贴文本',
+    });
+    const homepage = await storage.generateHomepage({
+      draftId: draft.id,
+      template: 'minimal',
+    });
+    const publicHomepage = await storage.getPublicHomepage(homepage.slug);
+
+    assert.equal(publicHomepage.publicUrl, homepage.publicUrl);
+    assert.equal(publicHomepage.resume.name, '测试用户');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('getPublicHomepage rejects offline homepage', async () => {
+  const { storage, cleanup } = await createTempStorage();
+
+  try {
+    const draft = await storage.createResumeDraft({
+      resume,
+      parser: 'local',
+      parseSource: '粘贴文本',
+    });
+    const homepage = await storage.generateHomepage({
+      draftId: draft.id,
+      template: 'minimal',
+    });
+    await storage.offlineHomepage(homepage.id);
+
+    await assert.rejects(
+      storage.getPublicHomepage(homepage.slug),
+      /主页已下线/,
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('generateHomepage keeps URL stable while publishing latest draft content', async () => {
+  const { storage, cleanup } = await createTempStorage();
+
+  try {
+    const draft = await storage.createResumeDraft({
+      resume,
+      parser: 'local',
+      parseSource: '粘贴文本',
+    });
+    const firstHomepage = await storage.generateHomepage({
+      draftId: draft.id,
+      template: 'minimal',
+    });
+
+    await storage.updateResumeDraft(draft.id, {
+      ...resume,
+      title: '高级前端工程师',
+    });
+    const updatedHomepage = await storage.generateHomepage({
+      draftId: draft.id,
+      template: 'professional',
+    });
+    const publicHomepage = await storage.getPublicHomepage(firstHomepage.slug);
+
+    assert.equal(updatedHomepage.publicUrl, firstHomepage.publicUrl);
+    assert.equal(publicHomepage.resume.title, '高级前端工程师');
+    assert.equal(publicHomepage.template, 'professional');
   } finally {
     await cleanup();
   }

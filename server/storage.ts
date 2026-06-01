@@ -86,6 +86,21 @@ export function createFileStorage(filePath = 'data/resume-store.json') {
       return draft;
     },
 
+    async updateResumeDraft(draftId: string, resume: ResumeData) {
+      const store = await readStore(filePath);
+      const draft = store.drafts.find((item) => item.id === draftId);
+
+      if (!draft) {
+        throw new Error('草稿不存在');
+      }
+
+      draft.resume = resume;
+      draft.updatedAt = createNextTimestamp(draft.updatedAt);
+      await writeStore(filePath, store);
+
+      return draft;
+    },
+
     async generateHomepage(input: GenerateHomepageInput) {
       const store = await readStore(filePath);
       const draft = store.drafts.find((item) => item.id === input.draftId);
@@ -101,7 +116,7 @@ export function createFileStorage(filePath = 'data/resume-store.json') {
         existingHomepage.resume = draft.resume;
         existingHomepage.status = 'published';
         existingHomepage.template = input.template;
-        existingHomepage.updatedAt = now;
+        existingHomepage.updatedAt = createNextTimestamp(existingHomepage.updatedAt);
         existingHomepage.publishedAt = now;
         existingHomepage.offlineAt = null;
         await writeStore(filePath, store);
@@ -141,9 +156,24 @@ export function createFileStorage(filePath = 'data/resume-store.json') {
 
       const now = new Date().toISOString();
       homepage.status = 'offline';
-      homepage.updatedAt = now;
+      homepage.updatedAt = createNextTimestamp(homepage.updatedAt);
       homepage.offlineAt = now;
       await writeStore(filePath, store);
+
+      return homepage;
+    },
+
+    async getPublicHomepage(slug: string) {
+      const store = await readStore(filePath);
+      const homepage = store.homepages.find((item) => item.slug === slug);
+
+      if (!homepage) {
+        throw new Error('主页不存在');
+      }
+
+      if (homepage.status !== 'published') {
+        throw new Error('主页已下线');
+      }
 
       return homepage;
     },
@@ -207,6 +237,13 @@ function createId(prefix: string) {
 
 function createSlug(draft: ResumeDraft) {
   return draft.id.replace(/^draft_/, '');
+}
+
+function createNextTimestamp(previousTimestamp: string) {
+  const now = Date.now();
+  const previousTime = Date.parse(previousTimestamp);
+
+  return new Date(Number.isFinite(previousTime) ? Math.max(now, previousTime + 1) : now).toISOString();
 }
 
 function getModelSettingsStatusFromStore(store: StoreData) {

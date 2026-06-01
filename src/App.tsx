@@ -1,18 +1,28 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import './App.css';
 import {
   type ResumeData,
   validateResumeFile,
 } from './resumeParser';
-
-interface StyleData {
-  sourceUrl: string;
-  colors: string[];
-  headingFont: string;
-  bodyFont: string;
-  cardStyle: 'rounded' | 'sharp' | 'pill';
-  darkMode: boolean;
-}
+import { extractResumeFileContent, isLikelyUnreadablePdfContent } from './resumeFileReader';
+import {
+  addExperience,
+  getCompletenessWarnings,
+  moveExperience,
+  polishResume,
+  removeExperience,
+  updateExperience,
+} from './resumeEditor';
+import {
+  getTemplateStyle,
+  RESUME_TEMPLATES,
+  type TemplateStyleData as StyleData,
+} from './resumeTemplates';
+import {
+  getModelProvider,
+  inferProviderFromApiKey,
+  MODEL_PROVIDERS,
+} from './modelProviders';
 
 interface ModelSettingsStatus {
   configured: boolean;
@@ -21,15 +31,6 @@ interface ModelSettingsStatus {
   model: string;
   maskedKey: string;
 }
-
-const MODEL_PROVIDER_PRESETS = [
-  { provider: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' },
-  { provider: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
-  { provider: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-  { provider: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-  { provider: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4.1-mini' },
-  { provider: '自定义', baseUrl: '', model: '' },
-];
 
 /* ===== 模拟简历数据 ===== */
 const MOCK_RESUME: ResumeData = {
@@ -43,6 +44,11 @@ const MOCK_RESUME: ResumeData = {
     { company: '某设计咨询公司', role: '初级设计师', period: '2019.06 — 2020.06', detail: '为金融、教育行业客户提供设计咨询服务，独立完成 8 个项目交付。' },
   ],
   education: '浙江大学 · 工业设计 · 本科 · 2019',
+  rawText: '示例简历：张明远，资深产品设计师，具备完整项目经历、技能与教育背景。',
+  sections: [
+    { title: '个人简介', content: '5 年产品设计经验，擅长从 0 到 1 搭建设计系统。' },
+    { title: '工作经历', content: '字节跳动、网易、设计咨询公司相关经历。' },
+  ],
 };
 
 async function saveResumeDraft(resume: ResumeData, parser: 'ai' | 'local', parseSource: string) {
@@ -63,17 +69,78 @@ async function saveResumeDraft(resume: ResumeData, parser: 'ai' | 'local', parse
   return result.draft;
 }
 
-function createPrototypeFileContent(file: File) {
-  const fallbackName = file.name.replace(/\.(pdf|docx)$/i, '').replace(/[-_]/g, ' ').trim();
+async function updateResumeDraft(draftId: string, resume: ResumeData) {
+  const response = await fetch('/api/resume-drafts/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ draftId, resume }),
+  });
+  const result = await response.json() as {
+    draft?: { id: string };
+    error?: string;
+  };
 
-  return `
-    姓名：${fallbackName || '未命名候选人'}
-    标题：
-    简介：
-    技能：
-    经历：
-    教育：
-  `;
+  if (!response.ok || !result.draft) {
+    throw new Error(result.error ?? '保存草稿失败，请重试');
+  }
+
+  return result.draft;
+}
+
+async function generateHomepage(draftId: string, template: string, isLoggedIn: boolean) {
+  const response = await fetch('/api/homepages/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ draftId, template, isLoggedIn }),
+  });
+  const result = await response.json() as {
+    homepage?: { id: string; publicUrl: string };
+    error?: string;
+    code?: string;
+  };
+
+  if (!response.ok || !result.homepage) {
+    throw new Error(result.error ?? '生成主页失败，请重试');
+  }
+
+  return result.homepage;
+}
+
+async function offlineHomepage(homepageId: string) {
+  const response = await fetch('/api/homepages/offline', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ homepageId }),
+  });
+  const result = await response.json() as {
+    homepage?: { id: string; status: string };
+    error?: string;
+  };
+
+  if (!response.ok || !result.homepage) {
+    throw new Error(result.error ?? '下线主页失败，请重试');
+  }
+
+  return result.homepage;
+}
+
+async function fetchPublicHomepage(slug: string) {
+  const response = await fetch(`/api/homepages/public/${encodeURIComponent(slug)}`);
+  const result = await response.json() as {
+    homepage?: {
+      id: string;
+      publicUrl: string;
+      resume: ResumeData;
+      template: string;
+    };
+    error?: string;
+  };
+
+  if (!response.ok || !result.homepage) {
+    throw new Error(result.error ?? '主页不可访问');
+  }
+
+  return result.homepage;
 }
 
 /* ===== 3 步流程 ===== */
@@ -84,8 +151,10 @@ const STEPS = [
 ];
 
 export default function App() {
+  const publicSlug = window.location.pathname.match(/^\/p\/([^/]+)/)?.[1] ?? '';
   const [step, setStep] = useState(0);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [developerAdminOpen, setDeveloperAdminOpen] = useState(false);
+  const [draftId, setDraftId] = useState('');
   const [modelStatus, setModelStatus] = useState<ModelSettingsStatus>({
     configured: false,
     provider: 'OpenAI',
@@ -99,15 +168,25 @@ export default function App() {
   const [uploaded, setUploaded] = useState(false);
 
   // 风格数据
-  const [style, setStyle] = useState<StyleData | null>(null);
+  const [style, setStyle] = useState<StyleData>(getTemplateStyle());
 
   const nextStep = () => setStep((s) => Math.min(s + 1, 2));
   const prevStep = () => setStep((s) => Math.max(s - 1, 0));
-
-  const openSettings = async () => {
-    setModelStatus(await fetchModelSettingsStatus());
-    setSettingsOpen(true);
+  const resetResume = () => {
+    setResume(null);
+    setUploaded(false);
+    setDraftId('');
+    setStep(0);
   };
+
+  const openDeveloperAdmin = async () => {
+    setModelStatus(await fetchModelSettingsStatus());
+    setDeveloperAdminOpen(true);
+  };
+
+  if (publicSlug) {
+    return <PublicHomepage slug={decodeURIComponent(publicSlug)} />;
+  }
 
   return (
     <div className="app">
@@ -115,18 +194,18 @@ export default function App() {
       <header className="app-header">
         <button
           className="settings-button"
-          onClick={() => void openSettings()}
+          onClick={() => void openDeveloperAdmin()}
         >
-          模型设置
+          开发者后台
         </button>
         <h1>ResumePage</h1>
         <p className="subtitle">简历 → 个人主页，3 分钟上线</p>
       </header>
 
-      {settingsOpen && (
-        <ModelSettingsDialog
+      {developerAdminOpen && (
+        <DeveloperAdminDialog
           initialStatus={modelStatus}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => setDeveloperAdminOpen(false)}
         />
       )}
 
@@ -152,7 +231,7 @@ export default function App() {
       {/* 主内容区 */}
       <main className="main-content">
         {/* Step 1 使用宽卡片容纳双栏布局 */}
-        <div className="step-card" style={step === 0 ? { maxWidth: 880 } : undefined}>
+        <div className="step-card" style={step === 0 ? { maxWidth: 1080 } : undefined}>
           {step === 0 && (
             <SetupStep
               resume={resume}
@@ -162,24 +241,37 @@ export default function App() {
                 setResume(parsedResume);
                 setUploaded(true);
               }}
+              onDraftSaved={setDraftId}
               onUpdateResume={setResume}
-              onExtractStyle={(s) => setStyle(s)}
+              onSelectTemplate={(s) => setStyle(s)}
+              onReset={resetResume}
+              onUseExample={() => {
+                setResume(MOCK_RESUME);
+                setUploaded(true);
+                void saveResumeDraft(MOCK_RESUME, 'local', '示例简历')
+                  .then((draft) => setDraftId(draft.id))
+                  .catch(() => setDraftId(''));
+              }}
               onNext={nextStep}
             />
           )}
           {step === 1 && (
             <PreviewStep
               resume={resume!}
-              style={style!}
+              style={style}
+              draftId={draftId}
               onUpdate={setResume}
               onNext={nextStep}
               onBack={prevStep}
+              onReset={resetResume}
             />
           )}
           {step === 2 && (
             <PublishStep
               resume={resume!}
-              style={style!}
+              style={style}
+              draftId={draftId}
+              onEdit={() => setStep(1)}
               onBack={prevStep}
             />
           )}
@@ -194,7 +286,7 @@ async function fetchModelSettingsStatus() {
   return await response.json() as ModelSettingsStatus;
 }
 
-function ModelSettingsDialog({
+function DeveloperAdminDialog({
   initialStatus,
   onClose,
 }: {
@@ -208,13 +300,34 @@ function ModelSettingsDialog({
   const [status, setStatus] = useState<ModelSettingsStatus>(initialStatus);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const selectedProvider = getModelProvider(provider);
+  const isCustomProvider = selectedProvider.id === 'custom';
+  const selectedModelExists = selectedProvider.models.some((item) => item.model === model);
+  const effectiveModel = isCustomProvider || selectedModelExists ? model : selectedProvider.models[0]?.model ?? '';
 
   const selectProvider = (nextProvider: string) => {
-    const preset = MODEL_PROVIDER_PRESETS.find((item) => item.provider === nextProvider);
+    const preset = getModelProvider(nextProvider);
 
-    setProvider(nextProvider);
-    setBaseUrl(preset?.baseUrl ?? '');
-    setModel(preset?.model ?? '');
+    setProvider(preset.provider);
+    setBaseUrl(preset.baseUrl);
+    setModel(preset.models[0]?.model ?? '');
+    setMessage('');
+  };
+
+  const updateApiKey = (nextApiKey: string) => {
+    const inferredProvider = inferProviderFromApiKey(nextApiKey);
+
+    setApiKey(nextApiKey);
+
+    if (!inferredProvider) {
+      return;
+    }
+
+    const preset = getModelProvider(inferredProvider.providerId);
+    setProvider(preset.provider);
+    setBaseUrl(preset.baseUrl);
+    setModel(inferredProvider.model);
+    setMessage(`已根据 Key 前缀匹配到 ${preset.provider}`);
   };
 
   const saveApiKey = async () => {
@@ -225,7 +338,7 @@ function ModelSettingsDialog({
       const response = await fetch('/api/settings/model-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, baseUrl, model, apiKey }),
+        body: JSON.stringify({ provider, baseUrl, model: effectiveModel, apiKey }),
       });
       const result = await response.json() as ModelSettingsStatus & { error?: string };
 
@@ -235,7 +348,7 @@ function ModelSettingsDialog({
 
       setStatus(result);
       setApiKey('');
-      setMessage('模型设置已保存');
+      setMessage('连接测试通过，模型设置已保存');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '保存模型设置失败');
     } finally {
@@ -248,11 +361,16 @@ function ModelSettingsDialog({
       <div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="model-settings-title">
         <div className="settings-dialog-header">
           <div>
-            <h2 id="model-settings-title">模型设置</h2>
-            <p>{status.configured ? `已配置 ${status.provider} · ${status.model} · ${status.maskedKey}` : '未配置模型'}</p>
+            <h2 id="model-settings-title">开发者后台</h2>
+            <p>{status.configured ? `模型已配置：${status.provider} · ${status.model} · ${status.maskedKey}` : '未配置模型，解析会回退到本地规则'}</p>
           </div>
-          <button className="settings-close" onClick={onClose} aria-label="关闭模型设置">×</button>
+          <button className="settings-close" onClick={onClose} aria-label="关闭开发者后台">×</button>
         </div>
+
+        <div className="settings-section-title">模型解析设置</div>
+        <p className="settings-help">
+          先选厂家和主流模型，再输入 API Key。保存前会自动测试连接；Key 只保存在服务端本地数据文件。
+        </p>
 
         <div className="field-group">
           <label htmlFor="model-provider">模型厂家</label>
@@ -261,20 +379,32 @@ function ModelSettingsDialog({
             value={provider}
             onChange={(event) => selectProvider(event.target.value)}
           >
-            {MODEL_PROVIDER_PRESETS.map((preset) => (
-              <option key={preset.provider} value={preset.provider}>{preset.provider}</option>
+            {MODEL_PROVIDERS.map((preset) => (
+              <option key={preset.id} value={preset.provider}>{preset.provider}</option>
             ))}
           </select>
         </div>
 
         <div className="field-group">
           <label htmlFor="model-name">模型名称</label>
-          <input
-            id="model-name"
-            value={model}
-            placeholder="gpt-4.1-mini"
-            onChange={(event) => setModel(event.target.value)}
-          />
+          {isCustomProvider ? (
+            <input
+              id="model-name"
+              value={model}
+              placeholder="例如 gpt-4.1-mini"
+              onChange={(event) => setModel(event.target.value)}
+            />
+          ) : (
+            <select
+              id="model-name"
+              value={effectiveModel}
+              onChange={(event) => setModel(event.target.value)}
+            >
+              {selectedProvider.models.map((item) => (
+                <option key={item.model} value={item.model}>{item.label}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div className="field-group">
@@ -294,8 +424,9 @@ function ModelSettingsDialog({
             type="password"
             value={apiKey}
             placeholder="sk-..."
-            onChange={(event) => setApiKey(event.target.value)}
+            onChange={(event) => updateApiKey(event.target.value)}
           />
+          <p className="field-help">可识别 OpenRouter、Gemini、OpenAI 项目 Key；普通 sk- 前缀会保留手动选择，避免误判。</p>
         </div>
 
         {message && <div className="settings-message">{message}</div>}
@@ -304,10 +435,10 @@ function ModelSettingsDialog({
           <button className="btn btn-secondary" onClick={onClose}>取消</button>
           <button
             className="btn btn-primary"
-            disabled={saving || !apiKey.trim() || !baseUrl.trim() || !model.trim()}
+            disabled={saving || !apiKey.trim() || !baseUrl.trim() || !effectiveModel.trim()}
             onClick={saveApiKey}
           >
-            {saving ? '保存中...' : '保存设置'}
+            {saving ? '测试中...' : '测试并保存'}
           </button>
         </div>
       </div>
@@ -323,16 +454,22 @@ function SetupStep({
   uploaded,
   style,
   onParsed,
+  onDraftSaved,
   onUpdateResume,
-  onExtractStyle,
+  onSelectTemplate,
+  onReset,
+  onUseExample,
   onNext,
 }: {
   resume: ResumeData | null;
   uploaded: boolean;
-  style: StyleData | null;
+  style: StyleData;
   onParsed: (resume: ResumeData) => void;
+  onDraftSaved: (draftId: string) => void;
   onUpdateResume: (r: ResumeData) => void;
-  onExtractStyle: (s: StyleData) => void;
+  onSelectTemplate: (s: StyleData) => void;
+  onReset: () => void;
+  onUseExample: () => void;
   onNext: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -343,11 +480,8 @@ function SetupStep({
   const [parserMode, setParserMode] = useState('');
   const [parseSource, setParseSource] = useState('');
   const [draftId, setDraftId] = useState('');
-  const [url, setUrl] = useState('https://apple.com');
-  const [extracting, setExtracting] = useState(false);
-  const [extractStep, setExtractStep] = useState(0);
 
-  const parseAndApply = useCallback(async (content: string, source: string) => {
+  const parseAndApply = useCallback(async (content: string, source: string, clientWarning = '') => {
     setParsing(true);
 
     try {
@@ -359,6 +493,7 @@ function SetupStep({
       const result = await response.json() as {
         resume?: ResumeData;
         parser?: string;
+        warning?: string;
         error?: string;
       };
 
@@ -371,15 +506,16 @@ function SetupStep({
 
       onParsed(result.resume);
       setDraftId(draft.id);
+      onDraftSaved(draft.id);
       setParserMode(parser === 'ai' ? 'AI 解析' : '本地解析');
       setParseSource(source);
-      setParseError('');
+      setParseError([clientWarning, result.warning].filter(Boolean).join('；'));
     } catch (error) {
       setParseError(error instanceof Error ? error.message : '解析失败，请重试');
     } finally {
       setParsing(false);
     }
-  }, [onParsed]);
+  }, [onDraftSaved, onParsed]);
 
   const parseFile = useCallback(async (file: File) => {
     const validation = validateResumeFile(file);
@@ -389,12 +525,19 @@ function SetupStep({
       return;
     }
 
-    if (file.name.toLowerCase().endsWith('.txt')) {
-      await parseAndApply(await file.text(), file.name);
+    const content = await extractResumeFileContent(file);
+
+    if (!content.trim()) {
+      setParseError('未识别到简历文字，请尝试上传可复制文字的 PDF/DOCX，或直接粘贴简历文本');
       return;
     }
 
-    await parseAndApply(createPrototypeFileContent(file), file.name);
+    if (file.name.toLowerCase().endsWith('.pdf') && isLikelyUnreadablePdfContent(content)) {
+      await parseAndApply(content, file.name, 'PDF 文字较少，可能是扫描版；已先按文件名生成草稿，建议粘贴简历文本补全');
+      return;
+    }
+
+    await parseAndApply(content, file.name);
   }, [parseAndApply]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -422,35 +565,14 @@ function SetupStep({
     if (resume) onUpdateResume({ ...resume, [field]: value });
   };
 
-  // 模拟提取流程
-  const handleExtract = () => {
-    if (!url.trim()) return;
-    setExtracting(true);
-    setExtractStep(0);
-    setTimeout(() => setExtractStep(1), 1000);
-    setTimeout(() => setExtractStep(2), 2000);
-    setTimeout(() => {
-      setExtractStep(3);
-      setExtracting(false);
-      onExtractStyle({
-        sourceUrl: url,
-        colors: ['#1d1d1f', '#f5f5f7', '#0071e3', '#86868b', '#ffffff'],
-        headingFont: 'SF Pro Display',
-        bodyFont: 'SF Pro Text',
-        cardStyle: 'rounded',
-        darkMode: false,
-      });
-    }, 3000);
-  };
-
-  // 是否可以进入下一步：简历上传完毕 + 风格已提取
-  const canNext = uploaded && style;
+  const previewResume = resume ?? MOCK_RESUME;
+  const canNext = uploaded;
 
   return (
     <div>
       <h2 style={{ marginBottom: 4 }}>上传简历 & 选择风格</h2>
       <p style={{ color: 'var(--color-text-muted)', fontSize: 14, marginBottom: 24 }}>
-        上传简历并粘贴一个你喜欢的网站 URL，一次性完成内容和风格的准备
+        上传简历后选择模板；不选也会默认使用「简约」并可继续生成。
       </p>
 
       <div className="setup-layout">
@@ -504,6 +626,16 @@ function SetupStep({
               {parseError && (
                 <div className="parse-error" role="alert">{parseError}</div>
               )}
+              <button className="btn btn-secondary" onClick={() => {
+                onUseExample();
+                setResumeText('');
+                setParseSource('示例简历');
+                setParseError('');
+                setDraftId('');
+                onDraftSaved('');
+              }}>
+                使用示例简历
+              </button>
             </>
           ) : (
             <div className="extracted-fields" style={{ marginTop: 0 }}>
@@ -513,6 +645,9 @@ function SetupStep({
               }}>
                 ✓ 简历解析完成{parseSource ? ` — ${parseSource}` : ''}{parserMode ? ` · ${parserMode}` : ''}{draftId ? ' · 草稿已保存' : ''}
               </div>
+              {parseError && (
+                <div className="parse-warning">{parseError}</div>
+              )}
 
               <div className="field-group">
                 <label>姓名</label>
@@ -547,92 +682,101 @@ function SetupStep({
                 <input value={resume!.education} onChange={(e) => updateField('education', e.target.value)} />
               </div>
 
+              {resume!.sections.length > 0 && (
+                <div className="field-group">
+                  <label>完整解析内容</label>
+                  <div className="parsed-sections">
+                    {resume!.sections.map((section) => (
+                      <details key={section.title} open>
+                        <summary>{section.title}</summary>
+                        <p>{section.content}</p>
+                      </details>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {resume!.rawText && (
+                <div className="field-group">
+                  <label>原始全文</label>
+                  <pre className="parsed-raw-text">{resume!.rawText}</pre>
+                </div>
+              )}
+
               <button className="btn btn-secondary" onClick={() => {
-                onParsed(MOCK_RESUME);
+                onUseExample();
+                setResumeText('');
                 setParseSource('示例简历');
                 setParseError('');
                 setDraftId('');
+                onDraftSaved('');
               }}>
                 使用示例简历
+              </button>
+              <button className="btn btn-secondary" onClick={() => {
+                onReset();
+              }}>
+                返回重新解析
               </button>
             </div>
           )}
         </div>
 
-        {/* ===== 右栏：提取风格 ===== */}
+        {/* ===== 右栏：选择模板 ===== */}
         <div className="setup-column">
-          <h3 className="column-title">🎨 提取风格</h3>
+          <h3 className="column-title">🎨 选择模板</h3>
           <p style={{ fontSize: 13, color: 'var(--color-text-muted)', marginBottom: 12 }}>
-            粘贴任意网站 URL，自动提取配色和版式
+            点击模板即可预览，右侧效果会实时更新。
           </p>
 
-          {/* URL 输入 */}
-          <div className="url-input-row" style={{ flexDirection: 'column', gap: 8 }}>
-            <input
-              type="url"
-              placeholder="粘贴网站 URL，例如 https://apple.com"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleExtract()}
-            />
-            <button
-              className="btn btn-primary"
-              onClick={handleExtract}
-              disabled={extracting}
-              style={{ width: '100%' }}
-            >
-              {extracting ? '提取中...' : '提取风格'}
-            </button>
+          <div className="template-picker">
+            {RESUME_TEMPLATES.map((template) => (
+              <button
+                key={template.id}
+                className={`template-card ${style.templateId === template.id ? 'selected' : ''}`}
+                onClick={() => onSelectTemplate(getTemplateStyle(template.id))}
+              >
+                <span className="template-card-badge">{template.badge}</span>
+                <strong>{template.name}</strong>
+                <span>{template.description}</span>
+                <div className="template-card-swatches">
+                  {template.style.colors.slice(0, 4).map((color) => (
+                    <i key={color} style={{ background: color }} />
+                  ))}
+                </div>
+              </button>
+            ))}
           </div>
 
-          {/* 提取动画 */}
-          {extracting && (
-            <div className="extracting-animation">
-              <div className="spinner" />
-              <div className="extracting-steps">
-                <span className={extractStep >= 1 ? 'done' : ''}>
-                  {extractStep >= 1 ? '✓' : '○'} 抓取页面样式
-                </span>
-                <span className={extractStep >= 2 ? 'done' : ''}>
-                  {extractStep >= 2 ? '✓' : '○'} 分析视觉特征
-                </span>
-                <span className={extractStep >= 3 ? 'done' : ''}>
-                  {extractStep >= 3 ? '✓' : '○'} 生成模板参数
-                </span>
-              </div>
+          <div className="template-live-preview">
+            <div className="template-live-preview-header">
+              <span>实时预览</span>
+              <strong>{RESUME_TEMPLATES.find((template) => template.id === style.templateId)?.name}</strong>
             </div>
-          )}
-
-          {/* 提取结果 */}
-          {style && !extracting && (
-            <div className="style-result" style={{ marginTop: 20 }}>
-              <div style={{
-                background: '#ebfbee', color: '#2b8a3e', padding: '8px 14px',
-                borderRadius: 8, fontSize: 13, marginBottom: 16,
-              }}>
-                ✓ 风格提取完成 — {new URL(style.sourceUrl).hostname}
+            <div className={`template-mini-page template-${style.templateId}`}>
+              <div className="template-mini-hero">
+                <div className="template-mini-avatar">{previewResume.name.charAt(0) || '简'}</div>
+                <div>
+                  <h4>{previewResume.name || '你的姓名'}</h4>
+                  <p>{previewResume.title || '目标职位'}</p>
+                </div>
               </div>
-
-              {/* 配色 */}
-              <div className="color-palette">
-                {style.colors.map((c) => (
-                  <div key={c} className="color-swatch" style={{ background: c, width: 36, height: 36 }} title={c} />
+              <p className="template-mini-bio">{previewResume.bio || '解析后会在这里展示你的个人简介。'}</p>
+              <div className="template-mini-tags">
+                {(previewResume.skills.length ? previewResume.skills : ['技能', '成果', '项目']).slice(0, 4).map((skill) => (
+                  <span key={skill}>{skill}</span>
                 ))}
               </div>
-
-              {/* 字体 */}
-              <div style={{ fontSize: 13, marginTop: 12 }}>
-                <div style={{ marginBottom: 4 }}>
-                  <span style={{ color: 'var(--color-text-muted)' }}>标题: </span>
-                  <span style={{ fontFamily: style.headingFont, fontWeight: 600 }}>{style.headingFont}</span>
-                </div>
-                <div>
-                  <span style={{ color: 'var(--color-text-muted)' }}>正文: </span>
-                  <span style={{ fontFamily: style.bodyFont }}>{style.bodyFont}</span>
-                </div>
+              <div className="template-mini-timeline">
+                {previewResume.experience.slice(0, 2).map((experience, index) => (
+                  <div key={`${experience.company}-${index}`}>
+                    <strong>{experience.role || '经历标题'}</strong>
+                    <span>{experience.company || '公司/项目'}</span>
+                  </div>
+                ))}
               </div>
             </div>
-          )}
+          </div>
         </div>
       </div>
 
@@ -657,23 +801,87 @@ function SetupStep({
 function PreviewStep({
   resume,
   style,
+  draftId,
   onUpdate,
   onNext,
   onBack,
+  onReset,
 }: {
   resume: ResumeData;
   style: StyleData;
+  draftId: string;
   onUpdate: (r: ResumeData) => void;
   onNext: () => void;
   onBack: () => void;
+  onReset: () => void;
 }) {
   const [expandedExp, setExpandedExp] = useState<number | null>(null);
   const [typingBio, setTypingBio] = useState(true);
   const [darkMode, setDarkMode] = useState(style.darkMode);
+  const [pastResumes, setPastResumes] = useState<ResumeData[]>([]);
+  const [futureResumes, setFutureResumes] = useState<ResumeData[]>([]);
+  const [saveStatus, setSaveStatus] = useState('已自动保存');
+  const [polishing, setPolishing] = useState(false);
+  const completenessWarnings = getCompletenessWarnings(resume);
+  const previewName = resume.name || '未填写姓名';
+  const previewTitle = resume.title || '待填写职位';
+  const previewBio = resume.bio || '这里会展示你的个人简介。可以在左侧补充关键经历、项目成果和职业亮点。';
+  const previewSkills = resume.skills.length > 0 ? resume.skills : ['待补充技能'];
+  const previewExperience = resume.experience.length > 0
+    ? resume.experience
+    : [{ company: '待补充公司/项目', role: '待补充经历', period: '时间待补充', detail: '在左侧新增经历后，时间轴会实时展示详情。' }];
 
-  // 更新字段
-  const updateField = (field: keyof ResumeData, value: string) => {
-    onUpdate({ ...resume, [field]: value });
+  const commitResume = (nextResume: ResumeData) => {
+    setPastResumes((items) => [...items, resume]);
+    setFutureResumes([]);
+    setSaveStatus(draftId ? '保存中...' : '已自动保存到当前会话');
+    onUpdate(nextResume);
+
+    if (!draftId) {
+      return;
+    }
+
+    void updateResumeDraft(draftId, nextResume)
+      .then(() => setSaveStatus('已自动保存到草稿'))
+      .catch(() => setSaveStatus('保存失败，请稍后重试'));
+  };
+
+  const updateField = (field: keyof ResumeData, value: string | string[]) => {
+    commitResume({ ...resume, [field]: value });
+  };
+
+  const undo = () => {
+    const previousResume = pastResumes.at(-1);
+
+    if (!previousResume) {
+      return;
+    }
+
+    setPastResumes((items) => items.slice(0, -1));
+    setFutureResumes((items) => [resume, ...items]);
+    setSaveStatus('已撤销 · 已自动保存');
+    onUpdate(previousResume);
+  };
+
+  const redo = () => {
+    const nextResume = futureResumes[0];
+
+    if (!nextResume) {
+      return;
+    }
+
+    setFutureResumes((items) => items.slice(1));
+    setPastResumes((items) => [...items, resume]);
+    setSaveStatus('已重做 · 已自动保存');
+    onUpdate(nextResume);
+  };
+
+  const handlePolish = () => {
+    setPolishing(true);
+    window.setTimeout(() => {
+      commitResume(polishResume(resume));
+      setPolishing(false);
+    }, 450);
   };
 
   return (
@@ -686,6 +894,25 @@ function PreviewStep({
       <div className="preview-layout">
         {/* 左侧：编辑器 */}
         <div className="preview-editor">
+          <div className="editor-toolbar">
+            <div className="save-status">{saveStatus}</div>
+            <div className="editor-actions">
+              <button className="icon-btn" onClick={undo} disabled={pastResumes.length === 0} title="撤销">↶</button>
+              <button className="icon-btn" onClick={redo} disabled={futureResumes.length === 0} title="重做">↷</button>
+              <button className="btn btn-secondary btn-compact" onClick={handlePolish} disabled={polishing}>
+                {polishing ? '润色中...' : 'AI 润色'}
+              </button>
+            </div>
+          </div>
+
+          {completenessWarnings.length > 0 && (
+            <div className="completeness-hints">
+              {completenessWarnings.map((warning) => (
+                <span key={warning}>{warning}</span>
+              ))}
+            </div>
+          )}
+
           <div className="field-group">
             <label>姓名</label>
             <input value={resume.name} onChange={(e) => updateField('name', e.target.value)} />
@@ -707,20 +934,105 @@ function PreviewStep({
             <input value={resume.education} onChange={(e) => updateField('education', e.target.value)} />
           </div>
 
-          {/* 经历编辑 */}
           <div className="field-group">
-            <label>工作经历（点击右侧时间轴展开）</label>
-            {resume.experience.map((exp, i) => (
-              <div key={i} style={{
-                background: 'var(--color-bg)', padding: '10px 12px',
-                borderRadius: 8, marginBottom: 8, fontSize: 13,
-              }}>
-                <strong>{exp.role}</strong> @ {exp.company}
-                <br />
-                <span style={{ color: 'var(--color-text-muted)' }}>{exp.period}</span>
+            <label>技能标签</label>
+            <input
+              value={resume.skills.join('，')}
+              onChange={(event) => updateField(
+                'skills',
+                event.target.value
+                  .split(/[,，、]/)
+                  .map((skill) => skill.trim())
+                  .filter(Boolean),
+              )}
+              placeholder="用逗号分隔，例如 React，TypeScript，设计系统"
+            />
+          </div>
+
+          {/* 经历编辑 */}
+          <div className="experience-editor">
+            <div className="experience-editor-header">
+              <label>工作经历</label>
+              <button className="btn btn-secondary btn-compact" onClick={() => commitResume(addExperience(resume))}>
+                新增经历
+              </button>
+            </div>
+            {resume.experience.map((experience, index) => (
+              <div key={`${experience.company}-${experience.role}-${index}`} className="experience-card">
+                <div className="experience-card-header">
+                  <strong>{experience.role || '未填写职位'}</strong>
+                  <div className="experience-card-actions">
+                    <button
+                      className="icon-btn"
+                      disabled={index === 0}
+                      onClick={() => commitResume(moveExperience(resume, index, -1))}
+                      title="上移"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      className="icon-btn"
+                      disabled={index === resume.experience.length - 1}
+                      onClick={() => commitResume(moveExperience(resume, index, 1))}
+                      title="下移"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      className="icon-btn danger"
+                      onClick={() => commitResume(removeExperience(resume, index))}
+                      title="删除"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+                <input
+                  value={experience.company}
+                  placeholder="公司"
+                  onChange={(event) => commitResume(updateExperience(resume, index, 'company', event.target.value))}
+                />
+                <input
+                  value={experience.role}
+                  placeholder="职位"
+                  onChange={(event) => commitResume(updateExperience(resume, index, 'role', event.target.value))}
+                />
+                <input
+                  value={experience.period}
+                  placeholder="时间，例如 2022-至今"
+                  onChange={(event) => commitResume(updateExperience(resume, index, 'period', event.target.value))}
+                />
+                <textarea
+                  value={experience.detail}
+                  placeholder="职责与成果"
+                  rows={3}
+                  onChange={(event) => commitResume(updateExperience(resume, index, 'detail', event.target.value))}
+                />
               </div>
             ))}
+            {resume.experience.length === 0 && (
+              <div className="empty-editor-hint">暂无经历，点击「新增经历」开始补充。</div>
+            )}
           </div>
+
+          {(resume.sections.length > 0 || resume.rawText) && (
+            <div className="field-group">
+              <label>完整解析内容</label>
+              {resume.sections.length > 0 && (
+                <div className="parsed-sections">
+                  {resume.sections.map((section) => (
+                    <details key={section.title} open>
+                      <summary>{section.title}</summary>
+                      <p>{section.content}</p>
+                    </details>
+                  ))}
+                </div>
+              )}
+              {resume.rawText && (
+                <pre className="parsed-raw-text">{resume.rawText}</pre>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 右侧：实时预览 */}
@@ -737,19 +1049,28 @@ function PreviewStep({
             {darkMode ? '☀️' : '🌙'}
           </button>
 
-          <div className="resume-page" style={{ color: darkMode ? '#e0e0e0' : undefined }}>
+          <div
+            className={`resume-page resume-template-${style.templateId} card-${style.cardStyle}`}
+            style={{
+              color: darkMode ? '#e0e0e0' : undefined,
+              fontFamily: style.bodyFont,
+            }}
+          >
             {/* 头像 & 基本信息 */}
             <div className="rp-header">
-              <div className="rp-avatar">{resume.name.charAt(0)}</div>
+              <div className="rp-avatar">{previewName.charAt(0)}</div>
               <div
                 className="rp-name"
-                style={{ color: darkMode ? '#fff' : undefined }}
+                style={{
+                  color: darkMode ? '#fff' : undefined,
+                  fontFamily: style.headingFont,
+                }}
               >
-                {resume.name}
+                {previewName}
               </div>
-              <div className="rp-title">{resume.title}</div>
+              <div className="rp-title">{previewTitle}</div>
               <div className="rp-bio">
-                {resume.bio}
+                {previewBio}
                 {typingBio && <span className="typewriter-cursor" />}
               </div>
               <button
@@ -765,7 +1086,7 @@ function PreviewStep({
 
             {/* 技能标签 */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center' }}>
-              {resume.skills.map((s) => (
+              {previewSkills.map((s) => (
                 <span
                   key={s}
                   className="tag"
@@ -787,7 +1108,7 @@ function PreviewStep({
               }}>
                 工作经历
               </h3>
-              {resume.experience.map((exp, i) => (
+              {previewExperience.map((exp, i) => (
                 <div
                   key={i}
                   className={`timeline-item ${expandedExp === i ? 'expanded' : ''}`}
@@ -849,7 +1170,7 @@ function PreviewStep({
                 fontSize: 14, fontWeight: 600,
                 color: darkMode ? '#fff' : 'var(--color-text-heading)',
               }}>
-                {resume.education}
+                {resume.education || '教育背景待补充'}
               </div>
             </div>
           </div>
@@ -857,7 +1178,10 @@ function PreviewStep({
       </div>
 
       <div className="btn-row">
-        <button className="btn btn-secondary" onClick={onBack}>← 上一步</button>
+        <div className="btn-row-left">
+          <button className="btn btn-secondary" onClick={onBack}>← 上一步</button>
+          <button className="btn btn-secondary" onClick={onReset}>重新上传解析</button>
+        </div>
         <button className="btn btn-primary" onClick={onNext}>
           下一步：发布 →
         </button>
@@ -872,16 +1196,72 @@ function PreviewStep({
 function PublishStep({
   resume,
   style,
+  draftId,
+  onEdit,
   onBack,
 }: {
   resume: ResumeData;
   style: StyleData;
+  draftId: string;
+  onEdit: () => void;
   onBack: () => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const pageUrl = `https://resumepage.com/@${resume.name.toLowerCase().replace(/\s/g, '')}`;
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState('');
+  const [offlineStatus, setOfflineStatus] = useState('');
+  const [offlining, setOfflining] = useState(false);
+  const [homepage, setHomepage] = useState<{ id: string; publicUrl: string } | null>(null);
+  const pageUrl = homepage ? new URL(homepage.publicUrl, window.location.origin).toString() : '';
+
+  const handleGenerate = async () => {
+    if (!loggedIn) {
+      setGenerationError('请先登录后再生成主页');
+      return;
+    }
+
+    if (!draftId) {
+      setGenerationError('缺少草稿 ID，请返回上一步重新解析或保存简历');
+      return;
+    }
+
+    setGenerating(true);
+    setGenerationError('');
+    setOfflineStatus('');
+
+    try {
+      setHomepage(await generateHomepage(draftId, style.templateId, loggedIn));
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : '生成主页失败，请重试');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleOffline = async () => {
+    if (!homepage) {
+      return;
+    }
+
+    setOfflining(true);
+    setOfflineStatus('');
+
+    try {
+      await offlineHomepage(homepage.id);
+      setOfflineStatus('主页已下线，分享链接暂不可访问');
+    } catch (error) {
+      setOfflineStatus(error instanceof Error ? error.message : '下线主页失败，请重试');
+    } finally {
+      setOfflining(false);
+    }
+  };
 
   const handleCopy = () => {
+    if (!pageUrl) {
+      return;
+    }
+
     navigator.clipboard.writeText(pageUrl).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -890,19 +1270,54 @@ function PublishStep({
 
   return (
     <div className="publish-success">
-      <span className="publish-icon">🚀</span>
-      <h2 style={{ marginBottom: 8 }}>你的个人主页已就绪！</h2>
+      <span className="publish-icon">{homepage ? '🚀' : '🔐'}</span>
+      <h2 style={{ marginBottom: 8 }}>{homepage ? '你的个人主页已就绪！' : '登录后生成个人主页'}</h2>
       <p style={{ color: 'var(--color-text-muted)', fontSize: 14 }}>
-        复制链接分享给任何人，对方打开即可看到你的专属主页
+        {homepage ? '复制链接分享给任何人，对方打开即可看到你的专属主页' : '后端会生成稳定可访问 URL，失败时可重新生成'}
       </p>
 
-      {/* 分享链接 */}
-      <div className="share-url-box">
-        <input type="text" value={pageUrl} readOnly />
-        <button className={`btn-copy ${copied ? 'copied' : ''}`} onClick={handleCopy}>
-          {copied ? '✓ 已复制' : '复制链接'}
+      <div className="login-gate">
+        <span>{loggedIn ? '已登录 · 可生成主页' : '未登录 · 请先登录'}</span>
+        <button
+          className={`btn ${loggedIn ? 'btn-secondary' : 'btn-primary'} btn-compact`}
+          onClick={() => {
+            setLoggedIn(true);
+            setGenerationError('');
+          }}
+        >
+          {loggedIn ? '已登录' : '演示登录'}
         </button>
       </div>
+
+      {!homepage && (
+        <div className="generation-panel">
+          <button
+            className="btn btn-primary"
+            disabled={generating}
+            onClick={() => void handleGenerate()}
+          >
+            {generating ? '生成中...' : '生成主页链接'}
+          </button>
+          {generationError && (
+            <div className="generation-error" role="alert">{generationError}</div>
+          )}
+        </div>
+      )}
+
+      {/* 分享链接 */}
+      {homepage && (
+        <div className="share-url-box">
+          <input type="text" value={pageUrl} readOnly />
+          <button className={`btn-copy ${copied ? 'copied' : ''}`} onClick={handleCopy}>
+            {copied ? '✓ 已复制' : '复制链接'}
+          </button>
+        </div>
+      )}
+      {offlineStatus && (
+        <div className={offlineStatus.includes('失败') ? 'generation-error' : 'generation-success'}>
+          {offlineStatus}
+        </div>
+      )}
 
       {/* 迷你预览 */}
       <div style={{
@@ -935,23 +1350,120 @@ function PublishStep({
 
       {/* 分享按钮 */}
       <div className="share-actions">
-        <button className="btn btn-secondary" style={{ fontSize: 13 }}>
-          💬 微信
+        <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={!homepage} onClick={handleCopy}>
+          🔗 复制链接
         </button>
-        <button className="btn btn-secondary" style={{ fontSize: 13 }}>
-          🐦 推特
+        <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={onEdit}>
+          ✏️ 再次编辑
         </button>
-        <button className="btn btn-secondary" style={{ fontSize: 13 }}>
-          💼 领英
+        <button
+          className="btn btn-secondary"
+          style={{ fontSize: 13 }}
+          disabled={!homepage || offlining}
+          onClick={() => void handleOffline()}
+        >
+          {offlining ? '下线中...' : '⛔ 下线主页'}
         </button>
       </div>
 
       <div className="btn-row">
         <button className="btn btn-secondary" onClick={onBack}>← 上一步</button>
-        <button className="btn btn-primary" onClick={() => window.open(pageUrl, '_blank')}>
-          打开我的主页 →
-        </button>
+        {homepage ? (
+          <div className="btn-row-left">
+            <button className="btn btn-secondary" disabled={generating} onClick={() => void handleGenerate()}>
+              重新生成
+            </button>
+            <button className="btn btn-secondary" onClick={onEdit}>
+              再次编辑
+            </button>
+            <button className="btn btn-primary" onClick={() => window.open(pageUrl, '_blank')}>
+              打开我的主页 →
+            </button>
+          </div>
+        ) : (
+          <button className="btn btn-primary" disabled={generating} onClick={() => void handleGenerate()}>
+            {generating ? '生成中...' : '生成主页链接'}
+          </button>
+        )}
       </div>
+    </div>
+  );
+}
+
+function PublicHomepage({ slug }: { slug: string }) {
+  const [homepage, setHomepage] = useState<{
+    resume: ResumeData;
+    template: string;
+  } | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void fetchPublicHomepage(slug)
+      .then(setHomepage)
+      .catch((fetchError) => setError(fetchError instanceof Error ? fetchError.message : '主页不可访问'));
+  }, [slug]);
+
+  if (error) {
+    return (
+      <div className="public-page-shell">
+        <div className="public-page-card">
+          <span className="publish-icon">🌙</span>
+          <h1>主页暂不可访问</h1>
+          <p>{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!homepage) {
+    return (
+      <div className="public-page-shell">
+        <div className="public-page-card">
+          <span className="publish-icon">⏳</span>
+          <h1>正在打开主页...</h1>
+        </div>
+      </div>
+    );
+  }
+
+  const publicStyle = getTemplateStyle(homepage.template);
+
+  return (
+    <div className="public-page-shell">
+      <article className={`public-resume-page resume-template-${publicStyle.templateId}`}>
+        <header className="public-hero" style={{ borderColor: publicStyle.colors[2] }}>
+          <div className="rp-avatar">{homepage.resume.name.charAt(0) || '简'}</div>
+          <h1>{homepage.resume.name || '未命名候选人'}</h1>
+          <p>{homepage.resume.title || '求职者'}</p>
+          <span>{homepage.resume.bio}</span>
+        </header>
+
+        <section className="public-section">
+          <h2>技能</h2>
+          <div className="tags">
+            {homepage.resume.skills.map((skill) => (
+              <span key={skill} className="tag">{skill}</span>
+            ))}
+          </div>
+        </section>
+
+        <section className="public-section">
+          <h2>经历</h2>
+          {homepage.resume.experience.map((experience, index) => (
+            <div key={`${experience.company}-${experience.role}-${index}`} className="timeline-item expanded">
+              <div className="timeline-period">{experience.period}</div>
+              <div className="timeline-role">{experience.role}</div>
+              <div className="timeline-company">{experience.company}</div>
+              <div className="timeline-detail">{experience.detail}</div>
+            </div>
+          ))}
+        </section>
+
+        <section className="public-section">
+          <h2>教育背景</h2>
+          <p>{homepage.resume.education || '暂未填写'}</p>
+        </section>
+      </article>
     </div>
   );
 }

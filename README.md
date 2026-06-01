@@ -1,5 +1,12 @@
 # React + TypeScript + Vite
 
+## 模型配置
+
+- 推荐在页面右上角打开「开发者后台」，选择模型厂家并填写 API Key。
+- Key 只保存在服务端本地的 `data/resume-store.json`，前端只展示脱敏状态。
+- 也可以用环境变量配置默认模型：`MODEL_API_KEY`、`MODEL_PROVIDER`、`MODEL_BASE_URL`、`MODEL_NAME`。
+- 如果只配置 `OPENAI_API_KEY`，系统会默认使用 OpenAI + `gpt-4.1-mini`。
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
