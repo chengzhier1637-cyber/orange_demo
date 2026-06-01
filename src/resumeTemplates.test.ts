@@ -7,11 +7,12 @@ import {
   RESUME_TEMPLATES,
 } from './resumeTemplates.ts';
 
-test('resume templates provide minimal professional and creative options', () => {
+test('resume templates provide baseline and pro vcard options', () => {
   assert.deepEqual(RESUME_TEMPLATES.map((template) => template.id), [
     'minimal',
     'professional',
     'creative',
+    'pro-vcard',
   ]);
 });
 
@@ -22,11 +23,11 @@ test('getTemplateById falls back to the minimal default template', () => {
 });
 
 test('getTemplateStyle converts selected template into page style data', () => {
-  const style = getTemplateStyle('creative');
+  const style = getTemplateStyle('pro-vcard');
 
-  assert.equal(style.templateId, 'creative');
-  assert.equal(style.sourceUrl, 'template://creative');
+  assert.equal(style.templateId, 'pro-vcard');
+  assert.equal(style.sourceUrl, 'template://pro-vcard');
   assert.equal(style.cardStyle, 'pill');
-  assert.equal(style.darkMode, false);
+  assert.equal(style.darkMode, true);
   assert.equal(style.colors.length, 5);
 });

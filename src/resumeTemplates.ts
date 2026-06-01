@@ -1,4 +1,4 @@
-export type ResumeTemplateId = 'minimal' | 'professional' | 'creative';
+export type ResumeTemplateId = 'minimal' | 'professional' | 'creative' | 'pro-vcard';
 
 export interface TemplateStyleData {
   templateId: ResumeTemplateId;
@@ -62,6 +62,20 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
       bodyFont: 'Inter',
       cardStyle: 'pill',
       darkMode: false,
+    },
+  },
+  {
+    id: 'pro-vcard',
+    name: 'Pro vCard',
+    description: '玻璃拟态电子名片，左侧固定个人信息，右侧展示经历与项目证据。',
+    badge: '高级',
+    highlights: ['玻璃拟态', '沉浸背景', '双栏名片'],
+    style: {
+      colors: ['#e5e7eb', '#0f172a', '#38bdf8', '#a78bfa', '#111827'],
+      headingFont: 'Inter',
+      bodyFont: 'Inter',
+      cardStyle: 'pill',
+      darkMode: true,
     },
   },
 ];

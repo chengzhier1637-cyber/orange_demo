@@ -18,6 +18,7 @@ import {
   RESUME_TEMPLATES,
   type TemplateStyleData as StyleData,
 } from './resumeTemplates';
+import { getProVcardProjects, type ProVcardProject } from './proVcardProjects';
 import {
   getModelProvider,
   inferProviderFromApiKey,
@@ -775,6 +776,13 @@ function SetupStep({
                   </div>
                 ))}
               </div>
+              {style.templateId === 'pro-vcard' && (
+                <div className="template-mini-dock">
+                  <span>经历</span>
+                  <span>项目</span>
+                  <span>联系</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1056,6 +1064,19 @@ function PreviewStep({
               fontFamily: style.bodyFont,
             }}
           >
+            {style.templateId === 'pro-vcard' ? (
+              <ProVcardResume
+                resume={resume}
+                previewName={previewName}
+                previewTitle={previewTitle}
+                previewBio={previewBio}
+                previewSkills={previewSkills}
+                previewExperience={previewExperience}
+                expandedExp={expandedExp}
+                onToggleExperience={(index) => setExpandedExp(expandedExp === index ? null : index)}
+              />
+            ) : (
+              <>
             {/* 头像 & 基本信息 */}
             <div className="rp-header">
               <div className="rp-avatar">{previewName.charAt(0)}</div>
@@ -1173,6 +1194,8 @@ function PreviewStep({
                 {resume.education || '教育背景待补充'}
               </div>
             </div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -1390,6 +1413,186 @@ function PublishStep({
   );
 }
 
+function ProVcardResume({
+  resume,
+  previewName,
+  previewTitle,
+  previewBio,
+  previewSkills,
+  previewExperience,
+  expandedExp,
+  onToggleExperience,
+}: {
+  resume: ResumeData;
+  previewName: string;
+  previewTitle: string;
+  previewBio: string;
+  previewSkills: string[];
+  previewExperience: ResumeData['experience'];
+  expandedExp: number | null;
+  onToggleExperience: (index: number) => void;
+}) {
+  const [activeProject, setActiveProject] = useState<ProVcardProject | null>(null);
+  const visibleSections = resume.sections
+    .filter((section) => section.content.trim())
+    .filter((section) => !['个人简介', '工作经历', '经历', '技能', '专业技能', '教育', '教育背景'].includes(section.title))
+    .slice(0, 3);
+  const featuredExperience = previewExperience[0];
+  const projects = getProVcardProjects(resume);
+
+  return (
+    <div className="pro-story">
+      <section className="pro-story-hero">
+        <div className="pro-orbit" aria-hidden="true">
+          <span className="orbit-ring orbit-ring-one" />
+          <span className="orbit-ring orbit-ring-two" />
+          <span className="orbit-dot orbit-dot-skill">Skills</span>
+          <span className="orbit-dot orbit-dot-work">Work</span>
+          <span className="orbit-dot orbit-dot-case">Cases</span>
+        </div>
+        <div className="pro-hero-copy">
+          <div className="pro-kicker">Interactive Resume</div>
+          <div className="rp-avatar">{previewName.charAt(0)}</div>
+          <h1>{previewName}</h1>
+          <p className="pro-title">{previewTitle}</p>
+          <p className="pro-bio">{previewBio}</p>
+          <div className="pro-hero-actions">
+            <span>联系我</span>
+            <span>下载简历</span>
+            <span>查看项目</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="pro-story-strip">
+        <div>
+          <strong>{previewExperience.length}</strong>
+          <span>段经历</span>
+        </div>
+        <div>
+          <strong>{previewSkills.length}</strong>
+          <span>项技能</span>
+        </div>
+        <div>
+          <strong>{visibleSections.length || 1}</strong>
+          <span>组亮点</span>
+        </div>
+      </section>
+
+      <section className="pro-story-section pro-story-feature">
+        <div className="pro-section-heading">
+          <span>01 / Signature</span>
+          <h2>代表性经历</h2>
+        </div>
+        <div className="pro-feature-card">
+          <div>
+            <span className="pro-feature-period">{featuredExperience.period}</span>
+            <h3>{featuredExperience.role}</h3>
+            <p>{featuredExperience.company}</p>
+          </div>
+          <p>{featuredExperience.detail}</p>
+        </div>
+      </section>
+
+      <section className="pro-story-section">
+        <div className="pro-section-heading">
+          <span>02 / Timeline</span>
+          <h2>点击展开经历</h2>
+        </div>
+        <div className="pro-timeline">
+          {previewExperience.map((experience, index) => (
+            <button
+              key={`${experience.company}-${experience.role}-${index}`}
+              className={`pro-timeline-card ${expandedExp === index ? 'active' : ''}`}
+              onClick={() => onToggleExperience(index)}
+            >
+              <span>{experience.period}</span>
+              <strong>{experience.role}</strong>
+              <em>{experience.company}</em>
+              <p>{experience.detail}</p>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="pro-story-section pro-skill-stage">
+        <div className="pro-section-heading">
+          <span>03 / Capability Map</span>
+          <h2>能力星图</h2>
+        </div>
+        <div className="pro-skill-cloud">
+          {previewSkills.map((skill, index) => (
+            <span key={skill} style={{ '--i': index } as React.CSSProperties}>{skill}</span>
+          ))}
+        </div>
+      </section>
+
+      <section className="pro-story-section">
+        <div className="pro-section-heading">
+          <span>04 / Project Gallery</span>
+          <h2>项目案例探索</h2>
+        </div>
+        <div className="pro-project-grid">
+          {projects.map((project, index) => (
+            <button
+              key={`${project.title}-${index}`}
+              className="pro-project-card"
+              onClick={() => setActiveProject(project)}
+            >
+              <span>Case {String(index + 1).padStart(2, '0')}</span>
+              <strong>{project.title}</strong>
+              <p>{project.summary}</p>
+              <em>点击查看详情 →</em>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="pro-story-section pro-proof-grid">
+        <div>
+          <div className="pro-section-heading">
+            <span>05 / Education</span>
+            <h2>教育背景</h2>
+          </div>
+          <p>{resume.education || '教育背景待补充'}</p>
+        </div>
+        <div>
+          <div className="pro-section-heading">
+            <span>06 / Proof</span>
+            <h2>补充亮点</h2>
+          </div>
+          {visibleSections.length > 0 ? (
+            visibleSections.map((section) => (
+              <div className="pro-proof-item" key={section.title}>
+                <strong>{section.title}</strong>
+                <p>{section.content}</p>
+              </div>
+            ))
+          ) : (
+            <p>可从项目经历、证书、作品集等模块中补充更多亮点。</p>
+          )}
+        </div>
+      </section>
+
+      {activeProject && (
+        <div className="pro-project-modal" role="dialog" aria-modal="true">
+          <button className="pro-project-backdrop" onClick={() => setActiveProject(null)} aria-label="关闭项目详情" />
+          <div className="pro-project-dialog">
+            <button className="pro-project-close" onClick={() => setActiveProject(null)}>×</button>
+            <span>Selected Case</span>
+            <h2>{activeProject.title}</h2>
+            <p>{activeProject.detail}</p>
+            <div className="pro-project-dialog-actions">
+              <button onClick={() => setActiveProject(null)}>返回浏览</button>
+              <button onClick={() => setActiveProject(null)}>联系我聊这个项目</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PublicHomepage({ slug }: { slug: string }) {
   const [homepage, setHomepage] = useState<{
     resume: ResumeData;
@@ -1427,6 +1630,32 @@ function PublicHomepage({ slug }: { slug: string }) {
   }
 
   const publicStyle = getTemplateStyle(homepage.template);
+  const publicName = homepage.resume.name || '未命名候选人';
+  const publicTitle = homepage.resume.title || '求职者';
+  const publicBio = homepage.resume.bio || '这位候选人正在完善个人简介。';
+  const publicSkills = homepage.resume.skills.length > 0 ? homepage.resume.skills : ['待补充技能'];
+  const publicExperience = homepage.resume.experience.length > 0
+    ? homepage.resume.experience
+    : [{ company: '待补充公司/项目', role: '待补充经历', period: '时间待补充', detail: '更多经历正在补充中。' }];
+
+  if (publicStyle.templateId === 'pro-vcard') {
+    return (
+      <div className="public-page-shell public-page-shell-pro">
+        <article className="public-resume-page public-resume-page-pro resume-template-pro-vcard">
+          <ProVcardResume
+            resume={homepage.resume}
+            previewName={publicName}
+            previewTitle={publicTitle}
+            previewBio={publicBio}
+            previewSkills={publicSkills}
+            previewExperience={publicExperience}
+            expandedExp={0}
+            onToggleExperience={() => undefined}
+          />
+        </article>
+      </div>
+    );
+  }
 
   return (
     <div className="public-page-shell">
