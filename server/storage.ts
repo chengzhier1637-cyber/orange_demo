@@ -57,6 +57,7 @@ interface GenerateHomepageInput {
 }
 
 const DEMO_USER_ID = 'demo-user';
+const DEFAULT_STORE_PATH = process.env.VERCEL ? '/tmp/resume-store.json' : 'data/resume-store.json';
 const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   provider: 'OpenAI',
   baseUrl: 'https://api.openai.com/v1',
@@ -64,7 +65,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   apiKey: '',
 };
 
-export function createFileStorage(filePath = 'data/resume-store.json') {
+export function createFileStorage(filePath = DEFAULT_STORE_PATH) {
   return {
     async createResumeDraft(input: CreateDraftInput) {
       const store = await readStore(filePath);

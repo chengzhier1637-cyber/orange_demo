@@ -1,5 +1,5 @@
 import type { Connect } from 'vite';
-import type { ServerResponse } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseResumeWithAi, testAiModelConnection } from '../src/aiResumeParser.ts';
 import { parseResumeContent, type ResumeData } from '../src/resumeParser.ts';
 import { logger } from './logger.ts';
@@ -9,182 +9,252 @@ const storage = createFileStorage();
 
 export function registerApiRoutes(middlewares: Connect.Server) {
   middlewares.use('/api/homepages/public', async (request, response) => {
-    if (!ensureMethod(request.method, response, 'GET')) {
-      return;
-    }
-
     const slug = request.url?.replace(/^\/+/, '').split('?')[0] ?? '';
-    logger.info('homepage.public.read', { slug });
-
-    try {
-      const homepage = await readPublicHomepage(slug, {
-        getPublicHomepage: storage.getPublicHomepage,
-      });
-
-      logger.info('homepage.public.success', { slug, publicUrl: homepage.publicUrl });
-      sendJson(response, 200, { homepage });
-    } catch (error) {
-      logger.warn('homepage.public.failed', { slug, error });
-      sendJson(response, 404, {
-        error: error instanceof Error ? error.message : '主页不可访问',
-      });
-    }
+    await handlePublicHomepageRequest(request, response, slug);
   });
 
   middlewares.use('/api/parse-resume', async (request, response) => {
-    if (!ensureMethod(request.method, response, 'POST')) {
-      return;
-    }
-
-    try {
-      const body = await readJsonBody<{ content?: string }>(request);
-      const content = body.content?.trim() ?? '';
-      const modelConfig = resolveModelConfig(await storage.getModelSettings(), process.env);
-      logger.info('resume.parse.start', {
-        content,
-        hasModelKey: Boolean(modelConfig.apiKey),
-        provider: modelConfig.provider,
-        model: modelConfig.model,
-      });
-
-      if (!content) {
-        logger.warn('resume.parse.failed', { reason: 'empty_content' });
-        sendJson(response, 400, { error: '未识别到简历内容' });
-        return;
-      }
-
-      const parseResult = await parseResumeWithFallback(modelConfig, content);
-
-      logger.info('resume.parse.success', {
-        parser: parseResult.parser,
-        warning: parseResult.warning,
-        sectionCount: parseResult.resume.sections.length,
-        experienceCount: parseResult.resume.experience.length,
-      });
-      sendJson(response, 200, {
-        ...parseResult,
-      });
-    } catch (error) {
-      logger.error('resume.parse.failed', { error });
-      sendJson(response, 500, {
-        error: error instanceof Error ? error.message : '解析失败，请重试',
-      });
-    }
+    await handleParseResumeRequest(request, response);
   });
 
   middlewares.use('/api/resume-drafts', async (request, response) => {
-    if (!ensureMethod(request.method, response, 'POST')) {
-      return;
-    }
-
-    try {
-      const body = await readJsonBody<{
-        resume?: ResumeData;
-        parser?: 'ai' | 'local';
-        parseSource?: string;
-      }>(request);
-
-      if (!body.resume) {
-        sendJson(response, 400, { error: '缺少简历内容' });
-        return;
-      }
-
-      const draft = await storage.createResumeDraft({
-        resume: body.resume,
-        parser: body.parser ?? 'local',
-        parseSource: body.parseSource ?? '未知来源',
-      });
-
-      logger.info('resume.draft.create', { draftId: draft.id, parser: draft.parser });
-      sendJson(response, 200, { draft });
-    } catch (error) {
-      logger.error('resume.draft.create.failed', { error });
-      sendJson(response, 500, {
-        error: error instanceof Error ? error.message : '保存草稿失败，请重试',
-      });
-    }
+    await handleCreateDraftRequest(request, response);
   });
 
   middlewares.use('/api/resume-drafts/update', async (request, response) => {
-    if (!ensureMethod(request.method, response, 'POST')) {
-      return;
-    }
-
-    try {
-      const body = await readJsonBody<{
-        draftId?: string;
-        resume?: ResumeData;
-      }>(request);
-
-      if (!body.draftId || !body.resume) {
-        sendJson(response, 400, { error: '缺少草稿 ID 或简历内容' });
-        return;
-      }
-
-      const draft = await storage.updateResumeDraft(body.draftId, body.resume);
-      logger.info('resume.draft.update', { draftId: draft.id });
-      sendJson(response, 200, { draft });
-    } catch (error) {
-      logger.error('resume.draft.update.failed', { error });
-      sendJson(response, 500, {
-        error: error instanceof Error ? error.message : '保存草稿失败，请重试',
-      });
-    }
+    await handleUpdateDraftRequest(request, response);
   });
 
   middlewares.use('/api/settings/model-key', async (request, response) => {
-    if (request.method === 'GET') {
-      try {
-        sendJson(response, 200, await storage.getModelSettingsStatus());
-      } catch (error) {
-        sendJson(response, 500, {
-          error: error instanceof Error ? error.message : '读取模型设置失败',
-        });
-      }
-      return;
-    }
-
-    if (!ensureMethod(request.method, response, 'POST')) {
-      return;
-    }
-
-    try {
-      const body = await readJsonBody<{
-        provider?: string;
-        baseUrl?: string;
-        model?: string;
-        apiKey?: string;
-      }>(request);
-
-      if (!body.apiKey?.trim()) {
-        sendJson(response, 400, { error: '请输入 API Key' });
-        return;
-      }
-
-      const settings = {
-        provider: body.provider ?? 'OpenAI',
-        baseUrl: body.baseUrl ?? 'https://api.openai.com/v1',
-        model: body.model ?? 'gpt-4.1-mini',
-        apiKey: body.apiKey,
-      };
-
-      await testAiModelConnection(settings);
-      logger.info('model.settings.save', {
-        provider: settings.provider,
-        baseUrl: settings.baseUrl,
-        model: settings.model,
-        hasApiKey: Boolean(settings.apiKey),
-      });
-      sendJson(response, 200, await storage.saveModelSettings(settings));
-    } catch (error) {
-      logger.error('model.settings.save.failed', { error });
-      sendJson(response, 500, {
-        error: error instanceof Error ? error.message : '保存模型设置失败',
-      });
-    }
+    await handleModelSettingsRequest(request, response);
   });
 
   middlewares.use('/api/homepages/generate', async (request, response) => {
+    await handleGenerateHomepageRequest(request, response);
+  });
+
+  middlewares.use('/api/homepages/offline', async (request, response) => {
+    await handleOfflineHomepageRequest(request, response);
+  });
+}
+
+export async function handleApiRequest(request: IncomingMessage, response: ServerResponse, path = request.url ?? '') {
+  const pathname = path.split('?')[0].replace(/^\/api/, '').replace(/^\/+/, '');
+
+  if (pathname === 'parse-resume') {
+    await handleParseResumeRequest(request, response);
+    return;
+  }
+
+  if (pathname === 'resume-drafts') {
+    await handleCreateDraftRequest(request, response);
+    return;
+  }
+
+  if (pathname === 'resume-drafts/update') {
+    await handleUpdateDraftRequest(request, response);
+    return;
+  }
+
+  if (pathname === 'settings/model-key') {
+    await handleModelSettingsRequest(request, response);
+    return;
+  }
+
+  if (pathname === 'homepages/generate') {
+    await handleGenerateHomepageRequest(request, response);
+    return;
+  }
+
+  if (pathname === 'homepages/offline') {
+    await handleOfflineHomepageRequest(request, response);
+    return;
+  }
+
+  if (pathname.startsWith('homepages/public/')) {
+    await handlePublicHomepageRequest(request, response, pathname.replace(/^homepages\/public\//, ''));
+    return;
+  }
+
+  sendJson(response, 404, { error: '接口不存在' });
+}
+
+async function handlePublicHomepageRequest(request: IncomingMessage, response: ServerResponse, slug: string) {
+  if (!ensureMethod(request.method, response, 'GET')) {
+    return;
+  }
+
+  logger.info('homepage.public.read', { slug });
+
+  try {
+    const homepage = await readPublicHomepage(slug, {
+      getPublicHomepage: storage.getPublicHomepage,
+    });
+
+    logger.info('homepage.public.success', { slug, publicUrl: homepage.publicUrl });
+    sendJson(response, 200, { homepage });
+  } catch (error) {
+    logger.warn('homepage.public.failed', { slug, error });
+    sendJson(response, 404, {
+      error: error instanceof Error ? error.message : '主页不可访问',
+    });
+  }
+}
+
+async function handleParseResumeRequest(request: IncomingMessage, response: ServerResponse) {
+  if (!ensureMethod(request.method, response, 'POST')) {
+    return;
+  }
+
+  try {
+    const body = await readJsonBody<{ content?: string }>(request);
+    const content = body.content?.trim() ?? '';
+    const modelConfig = resolveModelConfig(await storage.getModelSettings(), process.env);
+    logger.info('resume.parse.start', {
+      content,
+      hasModelKey: Boolean(modelConfig.apiKey),
+      provider: modelConfig.provider,
+      model: modelConfig.model,
+    });
+
+    if (!content) {
+      logger.warn('resume.parse.failed', { reason: 'empty_content' });
+      sendJson(response, 400, { error: '未识别到简历内容' });
+      return;
+    }
+
+    const parseResult = await parseResumeWithFallback(modelConfig, content);
+
+    logger.info('resume.parse.success', {
+      parser: parseResult.parser,
+      warning: parseResult.warning,
+      sectionCount: parseResult.resume.sections.length,
+      experienceCount: parseResult.resume.experience.length,
+    });
+    sendJson(response, 200, {
+      ...parseResult,
+    });
+  } catch (error) {
+    logger.error('resume.parse.failed', { error });
+    sendJson(response, 500, {
+      error: error instanceof Error ? error.message : '解析失败，请重试',
+    });
+  }
+}
+
+async function handleCreateDraftRequest(request: IncomingMessage, response: ServerResponse) {
+  if (!ensureMethod(request.method, response, 'POST')) {
+    return;
+  }
+
+  try {
+    const body = await readJsonBody<{
+      resume?: ResumeData;
+      parser?: 'ai' | 'local';
+      parseSource?: string;
+    }>(request);
+
+    if (!body.resume) {
+      sendJson(response, 400, { error: '缺少简历内容' });
+      return;
+    }
+
+    const draft = await storage.createResumeDraft({
+      resume: body.resume,
+      parser: body.parser ?? 'local',
+      parseSource: body.parseSource ?? '未知来源',
+    });
+
+    logger.info('resume.draft.create', { draftId: draft.id, parser: draft.parser });
+    sendJson(response, 200, { draft });
+  } catch (error) {
+    logger.error('resume.draft.create.failed', { error });
+    sendJson(response, 500, {
+      error: error instanceof Error ? error.message : '保存草稿失败，请重试',
+    });
+  }
+}
+
+async function handleUpdateDraftRequest(request: IncomingMessage, response: ServerResponse) {
+  if (!ensureMethod(request.method, response, 'POST')) {
+    return;
+  }
+
+  try {
+    const body = await readJsonBody<{
+      draftId?: string;
+      resume?: ResumeData;
+    }>(request);
+
+    if (!body.draftId || !body.resume) {
+      sendJson(response, 400, { error: '缺少草稿 ID 或简历内容' });
+      return;
+    }
+
+    const draft = await storage.updateResumeDraft(body.draftId, body.resume);
+    logger.info('resume.draft.update', { draftId: draft.id });
+    sendJson(response, 200, { draft });
+  } catch (error) {
+    logger.error('resume.draft.update.failed', { error });
+    sendJson(response, 500, {
+      error: error instanceof Error ? error.message : '保存草稿失败，请重试',
+    });
+  }
+}
+
+async function handleModelSettingsRequest(request: IncomingMessage, response: ServerResponse) {
+  if (request.method === 'GET') {
+    try {
+      sendJson(response, 200, await storage.getModelSettingsStatus());
+    } catch (error) {
+      sendJson(response, 500, {
+        error: error instanceof Error ? error.message : '读取模型设置失败',
+      });
+    }
+    return;
+  }
+
+  if (!ensureMethod(request.method, response, 'POST')) {
+    return;
+  }
+
+  try {
+    const body = await readJsonBody<{
+      provider?: string;
+      baseUrl?: string;
+      model?: string;
+      apiKey?: string;
+    }>(request);
+
+    if (!body.apiKey?.trim()) {
+      sendJson(response, 400, { error: '请输入 API Key' });
+      return;
+    }
+
+    const settings = {
+      provider: body.provider ?? 'OpenAI',
+      baseUrl: body.baseUrl ?? 'https://api.openai.com/v1',
+      model: body.model ?? 'gpt-4.1-mini',
+      apiKey: body.apiKey,
+    };
+
+    await testAiModelConnection(settings);
+    logger.info('model.settings.save', {
+      provider: settings.provider,
+      baseUrl: settings.baseUrl,
+      model: settings.model,
+      hasApiKey: Boolean(settings.apiKey),
+    });
+    sendJson(response, 200, await storage.saveModelSettings(settings));
+  } catch (error) {
+    logger.error('model.settings.save.failed', { error });
+    sendJson(response, 500, {
+      error: error instanceof Error ? error.message : '保存模型设置失败',
+    });
+  }
+}
+
+async function handleGenerateHomepageRequest(request: IncomingMessage, response: ServerResponse) {
     if (!ensureMethod(request.method, response, 'POST')) {
       return;
     }
@@ -215,9 +285,9 @@ export function registerApiRoutes(middlewares: Connect.Server) {
       logger.error('homepage.generate.failed', { error, code: apiError.body.code });
       sendJson(response, apiError.statusCode, apiError.body);
     }
-  });
+}
 
-  middlewares.use('/api/homepages/offline', async (request, response) => {
+async function handleOfflineHomepageRequest(request: IncomingMessage, response: ServerResponse) {
     if (!ensureMethod(request.method, response, 'POST')) {
       return;
     }
@@ -244,7 +314,6 @@ export function registerApiRoutes(middlewares: Connect.Server) {
         error: error instanceof Error ? error.message : '下线主页失败，请重试',
       });
     }
-  });
 }
 
 export function resolveModelConfig(
